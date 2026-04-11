@@ -1,0 +1,13 @@
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+disable_response_storage = true
+approvals_reviewer = "user"
+
+[tui]
+status_line = [
+  "current-dir",
+  "model-with-reasoning",
+  "context-remaining",
+  "used-tokens",
+  "fast-mode",
+]

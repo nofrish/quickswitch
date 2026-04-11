@@ -90,11 +90,20 @@ func symlinkCodexSharedData(runtimeDir string) error {
 
 func loadCodexDefaultConfig(codexDir string) (map[string]interface{}, error) {
 	src := filepath.Join(codexDir, "default-config.toml")
-	data, err := os.ReadFile(src)
+	var data []byte
+	var err error
+	data, err = os.ReadFile(src)
 	if os.IsNotExist(err) {
-		return make(map[string]interface{}), nil
-	}
-	if err != nil {
+		if scaffoldErr := scaffoldCodexDefaultConfig(src); scaffoldErr != nil {
+			fmt.Fprintf(os.Stderr, "quickswitch: warning: could not scaffold default config: %v\n", scaffoldErr)
+			return make(map[string]interface{}), nil
+		}
+		fmt.Fprintf(os.Stderr, "quickswitch: created default Codex config: %s\n  Edit this file to customize your settings.\n", src)
+		data, err = os.ReadFile(src)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read default-config.toml: %w", err)
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("failed to read default-config.toml: %w", err)
 	}
 

@@ -141,11 +141,20 @@ func copyPreferences(runtimeDir string) error {
 func loadDefaultSettings(claudeDir string) (map[string]interface{}, error) {
 	src := filepath.Join(claudeDir, "default-settings.json")
 
-	data, err := os.ReadFile(src)
+	var data []byte
+	var err error
+	data, err = os.ReadFile(src)
 	if os.IsNotExist(err) {
-		return make(map[string]interface{}), nil
-	}
-	if err != nil {
+		if scaffoldErr := scaffoldClaudeDefaultSettings(src); scaffoldErr != nil {
+			fmt.Fprintf(os.Stderr, "quickswitch: warning: could not scaffold default settings: %v\n", scaffoldErr)
+			return make(map[string]interface{}), nil
+		}
+		fmt.Fprintf(os.Stderr, "quickswitch: created default Claude settings: %s\n  Edit this file to customize your settings.\n", src)
+		data, err = os.ReadFile(src)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read default-settings.json: %w", err)
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("failed to read default-settings.json: %w", err)
 	}
 
