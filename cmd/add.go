@@ -21,49 +21,42 @@ func init() {
 }
 
 func runAdd(cmd *cobra.Command, args []string) error {
-	providers, err := config.LoadProviders()
-	if err != nil {
-		return err
-	}
-
-	// Step 1: tool + provider + profile name in one form
-	var tool, providerID, profileName string
-
-	toolOptions := []huh.Option[string]{
-		huh.NewOption("claude", "claude"),
-		huh.NewOption("codex", "codex"),
-	}
-
-	providerOptions := make([]huh.Option[string], 0, len(providers)+1)
-	for _, p := range providers {
-		providerOptions = append(providerOptions, huh.NewOption(p.Name, p.ID))
-	}
-	providerOptions = append(providerOptions, huh.NewOption("自定义", "custom"))
-
-	form := huh.NewForm(
+	// Step 1: select tool
+	var tool string
+	toolForm := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("选择工具").
-				Options(toolOptions...).
+				Options(
+					huh.NewOption("claude", "claude"),
+					huh.NewOption("codex", "codex"),
+				).
 				Value(&tool),
 		),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("选择供应商").
-				Options(providerOptions...).
-				Value(&providerID),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Profile 名称").
-				Value(&profileName),
-		),
 	)
-	if err := form.Run(); err != nil {
+	if err := toolForm.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			fmt.Println("Cancelled.")
 			return nil
 		}
+		return err
+	}
+
+	// Step 2: select provider + enter profile name (options depend on tool)
+	var providerID, profileName string
+	var err error
+
+	switch tool {
+	case "claude":
+		providerID, profileName, err = selectClaudeProviderAndName()
+	case "codex":
+		providerID, profileName, err = selectCodexProviderAndName()
+	}
+	if errors.Is(err, huh.ErrUserAborted) {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 
@@ -72,7 +65,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize config directory: %w", err)
 	}
 
-	// Step 2: check for duplicate profile
+	// Step 3: check for duplicate profile
 	cfg, err := loadOrInitEnvConfig(toolDir)
 	if err != nil {
 		return err
@@ -100,8 +93,18 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Step 3: collect credentials
-	profile, err := buildProfile(providerID)
+	// Step 4: collect credentials
+	var profile config.EnvProfile
+	switch tool {
+	case "claude":
+		profile, err = buildClaudeProfile(providerID)
+	case "codex":
+		profile, err = buildCodexProfile(providerID)
+	}
+	if errors.Is(err, huh.ErrUserAborted) {
+		fmt.Println("Cancelled.")
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -116,11 +119,40 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// buildProfile collects credentials based on the selected provider.
-// For presets, only asks for the API key. For custom, asks for all fields.
-func buildProfile(providerID string) (config.EnvProfile, error) {
+// --- Claude ---
+
+func selectClaudeProviderAndName() (providerID, profileName string, err error) {
+	providers, err := config.LoadProviders()
+	if err != nil {
+		return "", "", err
+	}
+
+	providerOptions := make([]huh.Option[string], 0, len(providers)+1)
+	for _, p := range providers {
+		providerOptions = append(providerOptions, huh.NewOption(p.Name, p.ID))
+	}
+	providerOptions = append(providerOptions, huh.NewOption("自定义", "custom"))
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("选择供应商").
+				Options(providerOptions...).
+				Value(&providerID),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Profile 名称").
+				Value(&profileName),
+		),
+	)
+	return providerID, profileName, form.Run()
+}
+
+// buildClaudeProfile collects Anthropic credentials based on the selected provider.
+func buildClaudeProfile(providerID string) (config.EnvProfile, error) {
 	if providerID == "custom" {
-		return buildCustomProfile()
+		return buildClaudeCustomProfile()
 	}
 
 	provider, ok := config.FindProvider(providerID)
@@ -150,8 +182,7 @@ func buildProfile(providerID string) (config.EnvProfile, error) {
 	return profile, nil
 }
 
-// buildCustomProfile asks the user to fill in all fields manually.
-func buildCustomProfile() (config.EnvProfile, error) {
+func buildClaudeCustomProfile() (config.EnvProfile, error) {
 	var authToken, baseURL string
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -177,9 +208,96 @@ func buildCustomProfile() (config.EnvProfile, error) {
 	return profile, nil
 }
 
+// --- Codex ---
+
+func selectCodexProviderAndName() (providerID, profileName string, err error) {
+	providers, err := config.LoadCodexProviders()
+	if err != nil {
+		return "", "", err
+	}
+
+	providerOptions := make([]huh.Option[string], 0, len(providers)+1)
+	for _, p := range providers {
+		providerOptions = append(providerOptions, huh.NewOption(p.Name, p.ID))
+	}
+	providerOptions = append(providerOptions, huh.NewOption("自定义", "custom"))
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("选择供应商").
+				Options(providerOptions...).
+				Value(&providerID),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Profile 名称").
+				Value(&profileName),
+		),
+	)
+	return providerID, profileName, form.Run()
+}
+
+// buildCodexProfile collects OpenAI-compatible credentials based on the selected provider.
+func buildCodexProfile(providerID string) (config.EnvProfile, error) {
+	if providerID == "custom" {
+		return buildCodexCustomProfile()
+	}
+
+	provider, ok := config.FindCodexProvider(providerID)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerID)
+	}
+
+	var apiKey string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("API Key").
+				Value(&apiKey),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return nil, err
+	}
+
+	return config.EnvProfile{
+		"OPENAI_API_KEY": apiKey,
+		"base_url":       provider.BaseURL,
+		"wire_api":       provider.WireAPI,
+	}, nil
+}
+
+func buildCodexCustomProfile() (config.EnvProfile, error) {
+	var apiKey, baseURL string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("OPENAI_API_KEY").
+				Value(&apiKey),
+			huh.NewInput().
+				Title("Base URL").
+				Value(&baseURL),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return nil, err
+	}
+
+	profile := config.EnvProfile{}
+	if apiKey != "" {
+		profile["OPENAI_API_KEY"] = apiKey
+	}
+	if baseURL != "" {
+		profile["base_url"] = baseURL
+		profile["wire_api"] = "responses"
+	}
+	return profile, nil
+}
+
 // loadOrInitEnvConfig loads the existing env.json, or returns an empty config if it doesn't exist yet.
-func loadOrInitEnvConfig(claudeDir string) (*config.EnvConfig, error) {
-	cfg, err := config.LoadEnvConfig(claudeDir)
+func loadOrInitEnvConfig(toolDir string) (*config.EnvConfig, error) {
+	cfg, err := config.LoadEnvConfig(toolDir)
 	if os.IsNotExist(err) {
 		return &config.EnvConfig{
 			Profiles: make(map[string]config.EnvProfile),

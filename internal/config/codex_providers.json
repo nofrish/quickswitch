@@ -1,0 +1,10 @@
+{
+  "providers": [
+    {
+      "id": "packycode",
+      "name": "PackyCode",
+      "base_url": "https://www.packyapi.com/v1",
+      "wire_api": "responses"
+    }
+  ]
+}

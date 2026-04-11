@@ -12,7 +12,7 @@ import (
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start <tool> [profile] [claude-args...]",
+	Use:   "start <tool> [profile] [tool-args...]",
 	Short: "Launch a tool with a profile. Interactively selects profile if not specified.",
 	// DisableFlagParsing lets all arguments pass through to the launched tool as-is.
 	DisableFlagParsing: true,
@@ -29,21 +29,18 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	tool := args[0]
-	if tool != "claude" {
-		return fmt.Errorf("unsupported tool %q, currently only 'claude' is supported", tool)
-	}
 
 	// If the next arg exists and doesn't look like a flag, treat it as a profile name.
 	// Otherwise, show an interactive selector.
 	var profileName string
-	var claudeArgs []string
+	var toolArgs []string
 
 	rest := args[1:]
 	if len(rest) > 0 && rest[0][0] != '-' {
 		profileName = rest[0]
-		claudeArgs = rest[1:]
+		toolArgs = rest[1:]
 	} else {
-		claudeArgs = rest
+		toolArgs = rest
 		selected, err := selectProfileInteractive(tool)
 		if err != nil {
 			return err
@@ -51,7 +48,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 		profileName = selected
 	}
 
-	return launchClaude(profileName, claudeArgs)
+	switch tool {
+	case "claude":
+		return launchClaude(profileName, toolArgs)
+	case "codex":
+		return launchCodex(profileName, toolArgs)
+	default:
+		return fmt.Errorf("unsupported tool %q, supported tools: claude, codex", tool)
+	}
 }
 
 func selectProfileInteractive(tool string) (string, error) {
@@ -112,9 +116,7 @@ func launchClaude(profileName string, extraArgs []string) error {
 		return err
 	}
 
-	// Strip any existing auth/URL env vars from the shell so that the values in
-	// settings.json (which contain the profile's credentials) take effect.
-	env := stripAuthEnvVars(os.Environ())
+	env := stripEnvVars(os.Environ(), claudeAuthEnvVars)
 	env = append(env, "CLAUDE_CONFIG_DIR="+runtimeDir)
 
 	claude := exec.Command("claude", extraArgs...)
@@ -126,14 +128,45 @@ func launchClaude(profileName string, extraArgs []string) error {
 	return claude.Run()
 }
 
-// resolveProfile loads the env vars for a named profile.
+// launchCodex builds a per-profile runtime directory and launches codex.
+// profileName may be empty (uses default-config.toml only, no credentials).
+// extraArgs are passed through to the codex process as-is.
+func launchCodex(profileName string, extraArgs []string) error {
+	codexDir, err := config.ToolDir("codex")
+	if err != nil {
+		return err
+	}
+
+	profile, err := resolveProfile(codexDir, profileName)
+	if err != nil {
+		return err
+	}
+
+	runtimeDir, err := config.BuildCodexRuntime(codexDir, profileName, profile)
+	if err != nil {
+		return err
+	}
+
+	env := stripEnvVars(os.Environ(), codexAuthEnvVars)
+	env = append(env, "CODEX_HOME="+runtimeDir)
+
+	codex := exec.Command("codex", extraArgs...)
+	codex.Env = env
+	codex.Stdin = os.Stdin
+	codex.Stdout = os.Stdout
+	codex.Stderr = os.Stderr
+
+	return codex.Run()
+}
+
+// resolveProfile loads the env vars for a named profile from the tool's config directory.
 // Returns an empty profile if profileName is empty.
-func resolveProfile(claudeDir string, profileName string) (config.EnvProfile, error) {
+func resolveProfile(toolDir string, profileName string) (config.EnvProfile, error) {
 	if profileName == "" {
 		return config.EnvProfile{}, nil
 	}
 
-	cfg, err := config.LoadEnvConfig(claudeDir)
+	cfg, err := config.LoadEnvConfig(toolDir)
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("no profiles found, use 'qs add' to create one")
 	}
@@ -149,22 +182,25 @@ func resolveProfile(claudeDir string, profileName string) (config.EnvProfile, er
 	return profile, nil
 }
 
-// authEnvVars is the set of environment variables that control API authentication
-// and routing. These are stripped from the inherited shell environment so that
-// the profile's settings.json values take effect instead.
-var authEnvVars = map[string]bool{
+// claudeAuthEnvVars are stripped from the shell so that the profile's settings.json values take effect.
+var claudeAuthEnvVars = map[string]bool{
 	"ANTHROPIC_API_KEY":       true,
 	"ANTHROPIC_AUTH_TOKEN":    true,
 	"ANTHROPIC_BASE_URL":      true,
 	"CLAUDE_CODE_OAUTH_TOKEN": true,
 }
 
-// stripAuthEnvVars returns a copy of env with all auth-related variables removed.
-func stripAuthEnvVars(env []string) []string {
+// codexAuthEnvVars are stripped from the shell so that the profile's auth.json values take effect.
+var codexAuthEnvVars = map[string]bool{
+	"OPENAI_API_KEY": true,
+}
+
+// stripEnvVars returns a copy of env with all keys in the given set removed.
+func stripEnvVars(env []string, keys map[string]bool) []string {
 	filtered := make([]string, 0, len(env))
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
-		if !authEnvVars[key] {
+		if !keys[key] {
 			filtered = append(filtered, entry)
 		}
 	}
