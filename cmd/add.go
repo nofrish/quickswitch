@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/nofrish/quickswitch/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -21,34 +21,77 @@ func init() {
 }
 
 func runAdd(cmd *cobra.Command, args []string) error {
-	reader := bufio.NewReader(os.Stdin)
-
-	// Step 1: select tool
-	tool, err := promptTool(reader)
+	providers, err := config.LoadProviders()
 	if err != nil {
 		return err
 	}
 
-	claudeDir, err := config.EnsureToolDir(tool)
+	// Step 1: tool + provider + profile name in one form
+	var tool, providerID, profileName string
+
+	toolOptions := []huh.Option[string]{
+		huh.NewOption("claude", "claude"),
+		huh.NewOption("codex", "codex"),
+	}
+
+	providerOptions := make([]huh.Option[string], 0, len(providers)+1)
+	for _, p := range providers {
+		providerOptions = append(providerOptions, huh.NewOption(p.Name, p.ID))
+	}
+	providerOptions = append(providerOptions, huh.NewOption("自定义", "custom"))
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("选择工具").
+				Options(toolOptions...).
+				Value(&tool),
+		),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("选择供应商").
+				Options(providerOptions...).
+				Value(&providerID),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Profile 名称").
+				Value(&profileName),
+		),
+	)
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+		return err
+	}
+
+	toolDir, err := config.EnsureToolDir(tool)
 	if err != nil {
 		return fmt.Errorf("failed to initialize config directory: %w", err)
 	}
 
-	// Step 2: ask for profile name
-	name, err := prompt(reader, "Profile name")
+	// Step 2: check for duplicate profile
+	cfg, err := loadOrInitEnvConfig(toolDir)
 	if err != nil {
 		return err
 	}
 
-	// Step 3: load existing config and check for duplicates
-	cfg, err := loadOrInitEnvConfig(claudeDir)
-	if err != nil {
-		return err
-	}
-
-	if _, exists := cfg.Profiles[name]; exists {
-		overwrite, err := promptConfirm(reader, fmt.Sprintf("Profile %q already exists. Overwrite?", name))
-		if err != nil {
+	if _, exists := cfg.Profiles[profileName]; exists {
+		var overwrite bool
+		confirm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Profile %q already exists. Overwrite?", profileName)).
+					Value(&overwrite),
+			),
+		)
+		if err := confirm.Run(); err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				fmt.Println("Cancelled.")
+				return nil
+			}
 			return err
 		}
 		if !overwrite {
@@ -57,18 +100,73 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Step 4: ask for env variables
-	authToken, err := prompt(reader, "ANTHROPIC_AUTH_TOKEN")
+	// Step 3: collect credentials
+	profile, err := buildProfile(providerID)
 	if err != nil {
 		return err
 	}
 
-	baseURL, err := prompt(reader, "ANTHROPIC_BASE_URL")
-	if err != nil {
-		return err
+	cfg.Profiles[profileName] = profile
+
+	if err := config.SaveEnvConfig(toolDir, cfg); err != nil {
+		return fmt.Errorf("failed to save profile: %w", err)
 	}
 
-	// Step 5: build and save the profile
+	fmt.Printf("\nProfile %q saved for %s.\n", profileName, tool)
+	return nil
+}
+
+// buildProfile collects credentials based on the selected provider.
+// For presets, only asks for the API key. For custom, asks for all fields.
+func buildProfile(providerID string) (config.EnvProfile, error) {
+	if providerID == "custom" {
+		return buildCustomProfile()
+	}
+
+	provider, ok := config.FindProvider(providerID)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerID)
+	}
+
+	var authToken string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("API Key").
+				Value(&authToken),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return nil, err
+	}
+
+	profile := config.EnvProfile{
+		"ANTHROPIC_AUTH_TOKEN": authToken,
+		"ANTHROPIC_BASE_URL":   provider.BaseURL,
+	}
+	for k, v := range provider.Env {
+		profile[k] = v
+	}
+	return profile, nil
+}
+
+// buildCustomProfile asks the user to fill in all fields manually.
+func buildCustomProfile() (config.EnvProfile, error) {
+	var authToken, baseURL string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("ANTHROPIC_AUTH_TOKEN").
+				Value(&authToken),
+			huh.NewInput().
+				Title("ANTHROPIC_BASE_URL").
+				Value(&baseURL),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return nil, err
+	}
+
 	profile := config.EnvProfile{}
 	if authToken != "" {
 		profile["ANTHROPIC_AUTH_TOKEN"] = authToken
@@ -76,36 +174,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	if baseURL != "" {
 		profile["ANTHROPIC_BASE_URL"] = baseURL
 	}
-
-	cfg.Profiles[name] = profile
-
-	if err := config.SaveEnvConfig(claudeDir, cfg); err != nil {
-		return fmt.Errorf("failed to save profile: %w", err)
-	}
-
-	fmt.Printf("\nProfile %q saved for %s.\n", name, tool)
-	return nil
-}
-
-// promptTool asks the user to select a tool, defaulting to claude.
-func promptTool(reader *bufio.Reader) (string, error) {
-	fmt.Println("Tool:")
-	fmt.Println("  a) claude (default)")
-	fmt.Println("  b) codex")
-
-	answer, err := prompt(reader, "Choice [a]")
-	if err != nil {
-		return "", err
-	}
-
-	switch strings.ToLower(answer) {
-	case "", "a":
-		return "claude", nil
-	case "b":
-		return "codex", nil
-	default:
-		return "", fmt.Errorf("invalid choice %q", answer)
-	}
+	return profile, nil
 }
 
 // loadOrInitEnvConfig loads the existing env.json, or returns an empty config if it doesn't exist yet.
@@ -120,23 +189,4 @@ func loadOrInitEnvConfig(claudeDir string) (*config.EnvConfig, error) {
 		return nil, fmt.Errorf("failed to load env config: %w", err)
 	}
 	return cfg, nil
-}
-
-// prompt prints a label and reads a line of input from the user.
-func prompt(reader *bufio.Reader, label string) (string, error) {
-	fmt.Printf("%s: ", label)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("failed to read input: %w", err)
-	}
-	return strings.TrimSpace(line), nil
-}
-
-// promptConfirm asks a yes/no question and returns true if the user answers "y".
-func promptConfirm(reader *bufio.Reader, question string) (bool, error) {
-	answer, err := prompt(reader, question+" (y/n)")
-	if err != nil {
-		return false, err
-	}
-	return strings.ToLower(answer) == "y", nil
 }

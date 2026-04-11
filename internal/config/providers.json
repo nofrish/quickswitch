@@ -1,0 +1,14 @@
+{
+  "providers": [
+    {
+      "id": "zhipu-glm",
+      "name": "智谱 GLM",
+      "base_url": "https://open.bigmodel.cn/api/anthropic",
+      "env": {
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "GLM-5.1",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "GLM-5.1",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "GLM-4.5-air"
+      }
+    }
+  ]
+}
