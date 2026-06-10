@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,8 +13,8 @@ import (
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start <tool> [profile] [tool-args...]",
-	Short: "Launch a tool with a profile. Interactively selects profile if not specified.",
+	Use:   "start [tool] [profile] [tool-args...]",
+	Short: "Launch a tool with a profile. Interactively selects tool/profile if not specified.",
 	// DisableFlagParsing lets all arguments pass through to the launched tool as-is.
 	DisableFlagParsing: true,
 	RunE:               runStart,
@@ -24,24 +25,47 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		return cmd.Help()
 	}
 
-	tool := args[0]
+	var tool string
+	var rest []string
+
+	if len(args) == 0 {
+		selectedTool, err := selectTool()
+		if errors.Is(err, huh.ErrUserAborted) {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		tool = selectedTool
+	} else {
+		tool = args[0]
+		rest = args[1:]
+	}
+
+	if !isSupportedTool(tool) {
+		return unsupportedToolError(tool)
+	}
 
 	// If the next arg exists and doesn't look like a flag, treat it as a profile name.
 	// Otherwise, show an interactive selector.
 	var profileName string
 	var toolArgs []string
 
-	rest := args[1:]
-	if len(rest) > 0 && rest[0][0] != '-' {
+	if len(rest) > 0 && rest[0] != "" && rest[0][0] != '-' {
 		profileName = rest[0]
 		toolArgs = rest[1:]
 	} else {
 		toolArgs = rest
 		selected, err := selectProfileInteractive(tool)
+		if errors.Is(err, huh.ErrUserAborted) {
+			fmt.Println("Cancelled.")
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -54,8 +78,16 @@ func runStart(cmd *cobra.Command, args []string) error {
 	case "codex":
 		return launchCodex(profileName, toolArgs)
 	default:
-		return fmt.Errorf("unsupported tool %q, supported tools: claude, codex", tool)
+		return unsupportedToolError(tool)
 	}
+}
+
+func isSupportedTool(tool string) bool {
+	return tool == "claude" || tool == "codex"
+}
+
+func unsupportedToolError(tool string) error {
+	return fmt.Errorf("unsupported tool %q, supported tools: claude, codex", tool)
 }
 
 func selectProfileInteractive(tool string) (string, error) {

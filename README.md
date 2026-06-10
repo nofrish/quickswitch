@@ -1,6 +1,6 @@
 # quickswitch (qs)
 
-A CLI tool for managing and launching AI coding tools (Claude Code, Codex) with different API profiles. Each terminal window can use a completely different provider configuration without affecting other running instances.
+A CLI tool for managing, launching, and switching AI coding tools (Claude Code, Codex) with different API profiles. Each terminal window can use a different provider configuration, and profiles can also be applied to the tools' official default config when needed.
 
 ## The Problem
 
@@ -8,7 +8,12 @@ Claude Code reads credentials and settings from `~/.claude/settings.json` — a 
 
 ## How It Works
 
-quickswitch solves this with `CLAUDE_CONFIG_DIR`, an environment variable that tells Claude Code to use a different directory instead of `~/.claude/`. For each profile, quickswitch:
+quickswitch has two modes:
+
+- `qs start [tool] [profile]` launches a single tool process with an isolated runtime directory.
+- `qs switch [tool] [profile]` writes the profile into the tool's official default config directory.
+
+For Claude Code, start mode uses `CLAUDE_CONFIG_DIR`, an environment variable that tells Claude Code to use a different directory instead of `~/.claude/`. For each profile, quickswitch:
 
 1. Reads `~/.config/quickswitch/claude/default-settings.json` (shared config: hooks, permissions, model, etc.)
 2. Merges the profile's env vars (`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`) into the `env` section
@@ -19,6 +24,13 @@ quickswitch solves this with `CLAUDE_CONFIG_DIR`, an environment variable that t
 7. Launches `claude` with `CLAUDE_CONFIG_DIR` pointing to the runtime directory
 
 The result: each window has isolated credentials but shared sessions, history, and all other data.
+
+For Codex, start mode uses `CODEX_HOME` and writes a per-profile `config.toml` and `auth.json` in `~/.config/quickswitch/codex/runtime/<profile>/`, while symlinking shared data back to `~/.codex/`.
+
+Switch mode directly updates the official default config:
+
+- Claude Code: `~/.claude/settings.json`
+- Codex: `~/.codex/config.toml` and `~/.codex/auth.json`
 
 ## Config Directory Structure
 
@@ -62,12 +74,24 @@ A standard Claude Code `settings.json` without the `env` section. Credentials ar
 
 ## Commands
 
-### Launch Claude
+### Launch With A Temporary Runtime
 
 ```bash
-qs claude <profile>              # launch with a specific profile
-qs claude <profile> --resume     # extra args are passed through to claude
-qs claude                        # launch using only default-settings.json, no credentials
+qs start claude <profile>              # launch Claude Code with a specific profile
+qs start claude <profile> --resume     # extra args are passed through to claude
+qs start codex <profile>               # launch Codex with a specific profile
+qs start codex <profile> --help        # extra args are passed through to codex
+qs start                               # interactively select tool and profile
+qs start claude                        # interactively select a Claude profile
+```
+
+### Switch Official Default Config
+
+```bash
+qs switch claude <profile>             # write profile into ~/.claude/settings.json
+qs switch codex <profile>              # write profile into ~/.codex/config.toml and auth.json
+qs switch                              # interactively select tool and profile
+qs switch codex                        # interactively select a Codex profile
 ```
 
 ### Manage Profiles

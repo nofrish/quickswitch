@@ -13,8 +13,8 @@ import (
 
 var (
 	toolStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("135")) // purple
-	profileStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")) // white
-	keyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))             // gray
+	profileStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))  // white
+	keyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))              // gray
 )
 
 var listCmd = &cobra.Command{
@@ -100,8 +100,10 @@ func profileNames(cfg *config.EnvConfig) []string {
 
 // secretKeys is the set of env variable names whose values should be redacted.
 var secretKeys = map[string]bool{
-	"ANTHROPIC_API_KEY":    true,
-	"ANTHROPIC_AUTH_TOKEN": true,
+	"ANTHROPIC_API_KEY":       true,
+	"ANTHROPIC_AUTH_TOKEN":    true,
+	"CLAUDE_CODE_OAUTH_TOKEN": true,
+	"OPENAI_API_KEY":          true,
 }
 
 // maybeRedact returns a masked value if the key is a known secret, otherwise returns the value as-is.
